@@ -1,0 +1,7 @@
+# Secrets - never commit your token
+.env
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
