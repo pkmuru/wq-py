@@ -7,20 +7,60 @@ It lets you list your Copilot agents and ask a question to one of them, all from
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - Your Microsoft 365 tenant is enabled for Work IQ
-- An Entra ID access token with audience `api://workiq.svc.cloud.microsoft` and scope `WorkIQAgent.Ask`
+- Either a Work IQ access token (Option 1) or an Entra ID app registration (Option 2), see [Authentication](#authentication)
 
-Getting a token for testing (Azure CLI, after `az login`):
+## Setup
+
+```bash
+cp .env.example .env     # then fill in Option 1 or Option 2 (see below)
+uv sync                  # creates .venv and installs dependencies
+```
+
+## Authentication
+
+The app needs a Work IQ access token (audience `api://workiq.svc.cloud.microsoft`, scope `WorkIQAgent.Ask`).
+`app/auth.py` picks one of two options for every request:
+
+| Option | When it is used | What happens |
+|--------|-----------------|--------------|
+| 1. Fixed token | `WORKIQ_ACCESS_TOKEN` in `.env` is **not empty** | That token is sent to Work IQ. The caller's header is ignored. |
+| 2. On-Behalf-Of (OBO) | `WORKIQ_ACCESS_TOKEN` is **empty** | The caller sends `Authorization: Bearer <user token>`. MSAL exchanges it for a Work IQ token for that user. |
+
+### Option 1: fixed token (quick testing)
 
 ```bash
 az account get-access-token --resource api://workiq.svc.cloud.microsoft --query accessToken -o tsv
 ```
 
-## Setup
+Paste the result into `WORKIQ_ACCESS_TOKEN` in `.env`.
+
+### Option 2: On-Behalf-Of
+
+1. In Entra ID, create an **app registration** for this API.
+2. **Certificates & secrets**: create a client secret.
+3. **Expose an API**: set the Application ID URI (`api://<CLIENT_ID>`) and add a scope, e.g. `access_as_user`.
+4. **API permissions**: add the delegated permission `WorkIQAgent.Ask` on the Work IQ API and grant admin consent.
+5. Fill in `.env`:
+
+   ```env
+   WORKIQ_ACCESS_TOKEN=
+   TENANT_ID=<directory (tenant) id>
+   CLIENT_ID=<application (client) id>
+   CLIENT_SECRET=<the secret value>
+   SCOPE=api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask
+   ```
+
+The caller's token must be issued **for this app** (audience `api://<CLIENT_ID>`), not for Work IQ.
+OBO only works when the token is meant for the app that does the exchange.
+
+**Getting a user token for testing:** in *Expose an API → Add a client application*, pre-authorize the
+Azure CLI (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for your scope. Then run:
 
 ```bash
-cp .env.example .env     # then paste your token into WORKIQ_ACCESS_TOKEN
-uv sync                  # creates .venv and installs dependencies
+az account get-access-token --scope api://<CLIENT_ID>/access_as_user --query accessToken -o tsv
 ```
+
+In Swagger UI, click **Authorize** and paste that token.
 
 ## Run
 
@@ -51,6 +91,7 @@ The answer includes a `conversation_id`. Send it back in the next request to con
 ```
 app/
   config.py         # settings loaded from .env (pydantic-settings)
+  auth.py           # picks the Work IQ token: fixed token or On-Behalf-Of (MSAL)
   schemas.py        # request/response models (pydantic)
   workiq_client.py  # the only file that talks MCP
   main.py           # FastAPI routes
@@ -61,5 +102,7 @@ app/
 | HTTP | Meaning                                                   |
 |------|-----------------------------------------------------------|
 | 401  | Work IQ rejected the token (expired or missing scope)     |
+| 401  | No `Authorization` header sent, or the OBO exchange failed (Option 2) |
+| 500  | Option 2 is selected but `TENANT_ID` / `CLIENT_ID` / `CLIENT_SECRET` are missing |
 | 502  | Work IQ returned a tool error (`isError: true`)           |
 | 503  | Could not reach the Work IQ server                        |

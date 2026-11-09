@@ -26,8 +26,11 @@ class WorkIQError(Exception):
         self.status_code = status_code
 
 
-async def _call_tool(name: str, arguments: dict[str, Any] | None = None) -> Any:
-    """Open a connection, call one tool, and return its parsed JSON result."""
+async def _call_tool(token: str, name: str, arguments: dict[str, Any] | None = None) -> Any:
+    """Open a connection, call one tool, and return its parsed JSON result.
+
+    `token` is the Work IQ access token (see app/auth.py for where it comes from).
+    """
     settings = get_settings()
 
     # The MCP SDK hides HTTP status codes, so remember the last one ourselves.
@@ -37,7 +40,7 @@ async def _call_tool(name: str, arguments: dict[str, Any] | None = None) -> Any:
         last_status["code"] = response.status_code
 
     http_client = create_mcp_http_client(
-        headers={"Authorization": f"Bearer {settings.workiq_access_token}"}
+        headers={"Authorization": f"Bearer {token}"}
     )
     http_client.event_hooks["response"] = [remember_status]
     transport = streamable_http_client(settings.workiq_mcp_url, http_client=http_client)
@@ -86,19 +89,21 @@ def _to_workiq_error(exc: Exception, http_status: int | None) -> WorkIQError:
     return WorkIQError(f"Unexpected error: {root!r}", status_code=502)
 
 
-async def list_agents() -> list[Agent]:
+async def list_agents(token: str) -> list[Agent]:
     """Return the agents available to the signed-in user."""
-    data = await _call_tool("list_agents")
+    data = await _call_tool(token, "list_agents")
     return [Agent.model_validate(item) for item in data]
 
 
-async def ask(question: str, agent_id: str, conversation_id: str | None = None) -> AskResponse:
+async def ask(
+    token: str, question: str, agent_id: str, conversation_id: str | None = None
+) -> AskResponse:
     """Ask a question to a specific agent."""
     arguments: dict[str, Any] = {"question": question, "agentId": agent_id}
     if conversation_id:
         arguments["conversationId"] = conversation_id
 
-    data = await _call_tool("ask", arguments)
+    data = await _call_tool(token, "ask", arguments)
 
     # Normal case: {"response": "...", "conversationId": "..."}.
     if isinstance(data, dict):
